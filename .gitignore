@@ -7,3 +7,6 @@ local.properties
 *.apk
 *.keystore
 *.jks
+
+# Built by scripts/build-bash.sh (in CI) from verified GNU source; not committed.
+app/src/main/jniLibs/

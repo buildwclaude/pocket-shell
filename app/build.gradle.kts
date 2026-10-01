@@ -11,8 +11,18 @@ android {
         applicationId = "com.pocketshell"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+
+        // Only the CPU types we build bash for (scripts/build-bash.sh):
+        // arm64-v8a = phones, x86_64 = the CI emulator.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+    }
+
+    // Extract native libs to disk on install: libbash.so has to exist as a real file in
+    // the native-library folder to be executed (it's a program, not a loaded library).
+    packaging {
+        jniLibs { useLegacyPackaging = true }
     }
 
     buildTypes {

@@ -62,7 +62,9 @@ class MainActivity : Activity(), TerminalSessionClient {
 
         terminalView = findViewById(R.id.terminal)
         terminalView.setTerminalViewClient(viewClient)
-        terminalView.setTypeface(Typeface.MONOSPACE)
+        // setTextSize() creates the renderer (monospace by default). It must come before
+        // any setTypeface() call, which dereferences the renderer — calling setTypeface()
+        // first crashed the app on launch.
         terminalView.setTextSize(fontSizePx)
 
         buildExtraKeys(findViewById(R.id.extra_keys))
@@ -79,27 +81,38 @@ class MainActivity : Activity(), TerminalSessionClient {
         super.onDestroy()
     }
 
-    /** Starts /system/bin/sh in the app's private home folder. */
+    /** Starts bash (or Android's /system/bin/sh as a fallback) in the app's private home folder. */
     private fun startSession() {
         val home = File(filesDir, "home").apply { mkdirs() }
         val tmp = File(cacheDir, "tmp").apply { mkdirs() }
+
+        // Our bash ships inside the APK as libbash.so; Android extracts it to the
+        // native-library folder, the one place an app is allowed to execute files from.
+        val bash = File(applicationInfo.nativeLibraryDir, "libbash.so")
+        val useBash = bash.canExecute()
+        if (useBash) Dotfiles.installIfMissing(home)
 
         // Keep Android's own variables (ANDROID_ROOT, BOOTCLASSPATH, ...): the system
         // tools in /system/bin need them. Then point HOME/TMPDIR at our sandbox.
         val env = System.getenv().toMutableMap().apply {
             put("TERM", "xterm-256color")
             put("COLORTERM", "truecolor")
+            // bash's built-in termcap has no terminal database on Android; hand it the
+            // xterm entry directly so line editing (arrows, Ctrl+L, ...) works properly.
+            put("TERMCAP", Dotfiles.XTERM_TERMCAP)
             put("HOME", home.absolutePath)
             put("TMPDIR", tmp.absolutePath)
             put("PWD", home.absolutePath)
             put("PATH", "/system/bin:/system/xbin")
+            put("SHELL", if (useBash) bash.absolutePath else "/system/bin/sh")
+            put("LANG", "en_US.UTF-8")
         }.map { (k, v) -> "$k=$v" }.toTypedArray()
 
-        val shell = "/system/bin/sh"
         val newSession = TerminalSession(
-            shell,
+            if (useBash) bash.absolutePath else "/system/bin/sh",
             home.absolutePath,
-            arrayOf("-sh"), // argv[0]; the leading '-' makes it a login shell
+            // argv[0]; the leading '-' makes it a login shell (reads ~/.bash_profile)
+            arrayOf(if (useBash) "-bash" else "-sh"),
             env,
             TRANSCRIPT_ROWS,
             this,

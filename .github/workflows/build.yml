@@ -1,8 +1,10 @@
 name: Build APK
 
-# Builds a debug (self-signed, installable) APK on every push to main, and also
-# on-demand from the Actions tab. The APK is attached to a rolling "latest"
-# GitHub Release so there's a stable link to open on the phone.
+# On every push to main (or on demand from the Actions tab):
+#   1. build   - cross-compile bash with the NDK, then build the debug APK
+#   2. test    - install it on an Android emulator, check it launches, bash runs
+#                and typed commands reach it; uploads a screenshot + logcat
+#   3. release - only if the test passed, attach the APK to the "latest" release
 on:
   push:
     branches: [ main ]
@@ -25,7 +27,7 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # The runner image ships an Android SDK at $ANDROID_HOME; use its sdkmanager
+      # The runner image ships an Android SDK + NDK at $ANDROID_HOME; use its sdkmanager
       # directly (android-actions/setup-android breaks on newer cmdline-tools).
       - name: Install SDK platform 35 + build-tools
         run: |
@@ -33,20 +35,89 @@ jobs:
           yes | "$SDKM" --licenses > /dev/null || true
           "$SDKM" "platform-tools" "platforms;android-35" "build-tools;35.0.0" > /dev/null
 
+      - name: Cache bash build
+        id: bash-cache
+        uses: actions/cache@v4
+        with:
+          path: app/src/main/jniLibs
+          key: bash-${{ hashFiles('scripts/build-bash.sh') }}
+
+      - name: Cross-compile bash
+        if: steps.bash-cache.outputs.cache-hit != 'true'
+        run: ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME" scripts/build-bash.sh
+
       - name: Build debug APK
         run: |
           chmod +x ./gradlew
           ./gradlew assembleDebug --stacktrace --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk PocketShell.apk
 
-      - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk PocketShell.apk
-
-      - name: Upload APK as a workflow artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PocketShell-apk
           path: PocketShell.apk
           if-no-files-found: error
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: PocketShell-apk
+
+      - name: Enable KVM (hardware acceleration for the emulator)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Accept SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Launch on emulator and smoke-test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            adb install -r PocketShell.apk
+            adb logcat -c
+            adb shell am start -W -n com.pocketshell/.MainActivity
+            sleep 10
+            adb shell pidof com.pocketshell || { echo "::error::App is not running (crashed?)"; adb logcat -d -b crash; exit 1; }
+            adb shell ps -A -o PID,NAME | grep libbash.so || { echo "::error::bash is not running"; adb logcat -d | grep -iE 'pocketshell|TerminalSession' | tail -50; exit 1; }
+            adb shell input text "touch%sproof-from-ci"
+            adb shell input keyevent KEYCODE_ENTER
+            sleep 3
+            adb shell run-as com.pocketshell ls files/home/proof-from-ci || { echo "::error::typed command did not run"; exit 1; }
+            adb shell screencap -p /sdcard/screen.png
+            adb pull /sdcard/screen.png screen.png
+            adb logcat -d > logcat.txt
+
+      - name: Upload screenshot + logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test
+          path: |
+            screen.png
+            logcat.txt
+          if-no-files-found: ignore
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: PocketShell-apk
 
       - name: Publish APK to the "latest" Release
         uses: softprops/action-gh-release@v2
@@ -54,7 +125,8 @@ jobs:
           tag_name: latest
           name: Latest build
           body: |
-            Automatically built by GitHub Actions from the latest commit on `main`.
+            Automatically built by GitHub Actions from the latest commit on `main`,
+            and smoke-tested on an Android emulator before publishing.
             Download **PocketShell.apk** below and install it on your phone.
           files: PocketShell.apk
           make_latest: true
