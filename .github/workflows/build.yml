@@ -25,13 +25,13 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # The runner image ships an Android SDK at $ANDROID_HOME; use its sdkmanager
+      # directly (android-actions/setup-android breaks on newer cmdline-tools).
       - name: Install SDK platform 35 + build-tools
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platform-tools" "platforms;android-35" "build-tools;35.0.0" > /dev/null
 
       - name: Build debug APK
         run: |
