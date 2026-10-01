@@ -1,0 +1,16 @@
+# Gradle version catalog — single source of truth for dependency versions.
+
+[versions]
+agp = "8.7.2"
+kotlin = "2.0.21"
+coreKtx = "1.13.1"
+# Termux's terminal-emulator + terminal-view libraries (Apache-2.0), via JitPack.
+termux = "v0.118.3"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+termux-terminal-view = { group = "com.github.termux.termux-app", name = "terminal-view", version.ref = "termux" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
